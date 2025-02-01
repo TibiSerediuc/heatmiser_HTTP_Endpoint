@@ -28,6 +28,10 @@ bool isConfigMode = true;
 unsigned long configModeStartTime;
 bool endpointsCreated = false;
 
+// Add after global variables
+unsigned long lastTempRequest = 0;
+const unsigned long TEMP_TIMEOUT = 2000; // 2 seconds timeout
+
 // Configuration structure
 struct Config
 {
@@ -515,20 +519,44 @@ void createHttpEndpoints(JsonObject zones)
     String getTempPath = "/get_temp/" + encodedZoneName;
     server.on(getTempPath.c_str(), HTTP_GET, [zoneName]()
     {
-
-      sendGetTemperatureCommand(zoneName);
-      String response = "{\"zone\":\"" + zoneName +  "\",\"temperature\":" + temperatures[zoneName] + "}";
-      server.send(200, "application/json", response);
-
-      // auto it = temperatures.find(zoneName);
-      // if (it != temperatures.end()) {
-      //     String response = "{\"zone\":\"" + zoneName + 
-      //                     "\",\"temperature\":" + 
-      //                     String(it->second, 1) + "}";
-      //     server.send(200, "application/json", response);
-      // } else {
-      //     server.send(404, "text/plain", "Temperature not available for zone: " + zoneName);
-      // } 
+        auto it = temperatures.find(zoneName);
+        
+        // If we have a cached value, return it
+        if (it != temperatures.end()) {
+            String response = "{\"zone\":\"" + zoneName + 
+                             "\",\"temperature\":" + 
+                             String(it->second, 1) + "}";
+            server.send(200, "application/json", response);
+            
+            // Request fresh value in background
+            sendGetTemperatureCommand(zoneName);
+            return;
+        }
+        
+        // No cached value - request and wait
+        sendGetTemperatureCommand(zoneName);
+        lastTempRequest = millis();
+        
+        // Wait for response with timeout
+        while (millis() - lastTempRequest < TEMP_TIMEOUT) {
+            webSocket.loop(); // Keep WebSocket alive
+            delay(100);
+            
+            // Check if temperature arrived
+            it = temperatures.find(zoneName);
+            if (it != temperatures.end()) {
+                String response = "{\"zone\":\"" + zoneName + 
+                                "\",\"temperature\":" + 
+                                String(it->second, 1) + "}";
+                server.send(200, "application/json", response);
+                return;
+            }
+        }
+        
+        // Timeout reached
+        server.send(202, "text/plain", 
+            "Temperature request sent for zone: " + zoneName + 
+            ". Please try again in a few seconds.");
     });
 
     Serial.println("Registered endpoint: " + getTempPath);
