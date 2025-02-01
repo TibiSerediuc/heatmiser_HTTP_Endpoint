@@ -22,6 +22,7 @@ WebSocketsClient webSocket;
 DNSServer dnsServer;
 bool isConfigMode = true;
 unsigned long configModeStartTime;
+bool endpointsCreated = false;
 
 // Configuration structure
 struct Config {
@@ -280,12 +281,10 @@ void handleWebSocketMessage(uint8_t * payload, size_t length) {
     return;
   }
   
-  // Log the entire message for debugging
   String debugMsg;
   serializeJson(doc, debugMsg);
   Serial.println("Received JSON: " + debugMsg);
   
-  // Handle different message types
   const char* messageType = doc["message_type"];
   if (messageType) {
     Serial.println("Message type: " + String(messageType));
@@ -293,10 +292,13 @@ void handleWebSocketMessage(uint8_t * payload, size_t length) {
     if (strcmp(messageType, "hm_set_command_response") == 0) {
       int commandId = doc["command_id"];
       Serial.println("Command ID: " + String(commandId));
+      
+      // Only create endpoints for GET_ZONES response (command_id 2)
       if (commandId == 2) {
         String response = doc["response"];
         Serial.println("Received zones response: " + response);
         
+        // Verify this is a zones list response by checking content
         DynamicJsonDocument zoneDoc(1024);
         DeserializationError zoneError = deserializeJson(zoneDoc, response.c_str());
         if (zoneError) {
@@ -304,7 +306,18 @@ void handleWebSocketMessage(uint8_t * payload, size_t length) {
           Serial.println(zoneError.c_str());
           return;
         }
-        createHttpEndpoints(zoneDoc.as<JsonObject>());
+
+        // Skip if response contains "result" instead of zones
+        if (zoneDoc.containsKey("result")) {
+          Serial.println("Skipping endpoint creation - not a zones list");
+          return;
+        }
+
+        // Only create endpoints if not already created
+        if (!endpointsCreated) {
+          createHttpEndpoints(zoneDoc.as<JsonObject>());
+          endpointsCreated = true;
+        }
       }
     }
   }
