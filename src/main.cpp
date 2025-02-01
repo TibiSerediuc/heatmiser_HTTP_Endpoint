@@ -4,6 +4,8 @@
 #include <DNSServer.h>
 #include <EEPROM.h>
 #include <ArduinoJson.h>
+#include <WiFiClient.h>
+#include <uri/UriBraces.h>
 
 // Constants
 #define EEPROM_SIZE 512
@@ -50,6 +52,13 @@ void handleGetTemperature();
 void handleReset();
 void handleGetZones();
 void checkWebSocketConnection();
+void sendGetZonesCommand();
+void createHttpEndpoints(JsonObject zones);
+void sendGetLiveDataCommand(String zone);
+void sendSetTemperatureCommand(String zone, float temperature);
+void sendStandbyCommand(String zone, bool on);
+float extractTemperatureFromRequest();
+String urlEncode(const String &str);
 
 void setup() {
   Serial.begin(115200);
@@ -62,6 +71,8 @@ void setup() {
     startConfigMode();
   } else {
     connectToNetwork();
+    setupWebSocket();
+    setupHttpServer();
   }
 }
 
@@ -210,7 +221,7 @@ void webSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
       
     case WStype_CONNECTED:
       Serial.println("WebSocket Connected!");
-      sendCommand();
+      sendGetZonesCommand();  // Send GET_ZONES command when connected
       break;
       
     case WStype_TEXT:
@@ -251,6 +262,11 @@ void sendCommand() {
     webSocket.sendTXT(command);
 }
 
+void sendGetZonesCommand() {
+  String command = "{\"message_type\":\"hm_get_command_queue\",\"message\":\"{\\\"token\\\":\\\"" + 
+                   String(config.api_key) + "\\\",\\\"COMMANDS\\\":[{\\\"COMMAND\\\":\\\"{'GET_ZONES': 1}\\\",\\\"COMMANDID\\\":2}]}\"}";
+  webSocket.sendTXT(command);
+}
 
 void handleWebSocketMessage(uint8_t * payload, size_t length) {
   Serial.println("Parsing message...");
@@ -274,15 +290,131 @@ void handleWebSocketMessage(uint8_t * payload, size_t length) {
   if (messageType) {
     Serial.println("Message type: " + String(messageType));
     
-    if (strcmp(messageType, "hm_response") == 0) {
-      // Handle response
-      JsonObject message = doc["message"];
-      if (!message.isNull()) {
-        // Process the response
-        // Add specific handling based on the response structure
+    if (strcmp(messageType, "hm_set_command_response") == 0) {
+      int commandId = doc["command_id"];
+      Serial.println("Command ID: " + String(commandId));
+      if (commandId == 2) {
+        String response = doc["response"];
+        Serial.println("Received zones response: " + response);
+        
+        DynamicJsonDocument zoneDoc(1024);
+        DeserializationError zoneError = deserializeJson(zoneDoc, response.c_str());
+        if (zoneError) {
+          Serial.print("deserializeJson() failed for zones: ");
+          Serial.println(zoneError.c_str());
+          return;
+        }
+        createHttpEndpoints(zoneDoc.as<JsonObject>());
       }
     }
   }
+}
+
+String urlEncode(const String &str) {
+  String encodedString = "";
+  char c;
+  char code0;
+  char code1;
+  char code2;
+  for (int i = 0; i < str.length(); i++) {
+    c = str.charAt(i);
+    if (c == ' ') {
+      encodedString += '+';
+    } else if (isalnum(c)) {
+      encodedString += c;
+    } else {
+      code1 = (c & 0xf) + '0';
+      if ((c & 0xf) > 9) {
+        code1 = (c & 0xf) - 10 + 'A';
+      }
+      c = (c >> 4) & 0xf;
+      code0 = c + '0';
+      if (c > 9) {
+        code0 = c - 10 + 'A';
+      }
+      code2 = '\0';
+      encodedString += '%';
+      encodedString += code0;
+      encodedString += code1;
+    }
+  }
+  return encodedString;
+}
+
+void createHttpEndpoints(JsonObject zones) {
+  Serial.println("Creating HTTP endpoints for zones...");
+  
+  for(JsonPair kv : zones) {
+    String zoneName = kv.key().c_str();
+    String encodedZoneName = urlEncode(zoneName);
+    
+    // Create standby endpoints
+    String standbyOnPath = "/standby_on/" + encodedZoneName;
+    String standbyOffPath = "/standby_off/" + encodedZoneName;
+    
+    // Register handlers with explicit paths
+    server.on(standbyOnPath.c_str(), HTTP_GET, [zoneName]() {
+      Serial.println("Standby ON request for zone: " + zoneName);
+      sendStandbyCommand(zoneName, true);
+      server.send(200, "text/plain", "Standby ON sent for: " + zoneName);
+    });
+    
+    server.on(standbyOffPath.c_str(), HTTP_GET, [zoneName]() {
+      Serial.println("Standby OFF request for zone: " + zoneName);
+      sendStandbyCommand(zoneName, false); 
+      server.send(200, "text/plain", "Standby OFF sent for: " + zoneName);
+    });
+
+    // Add temperature endpoint
+    String setTempPath = "/set_temp/" + encodedZoneName;
+    server.on(setTempPath.c_str(), HTTP_GET, [zoneName]() {
+      if(server.hasArg("temp")) {
+        float temp = server.arg("temp").toFloat();
+        Serial.println("Setting temperature for zone " + zoneName + " to " + String(temp));
+        sendSetTemperatureCommand(zoneName, temp);
+        server.send(200, "text/plain", "Temperature set to " + String(temp) + " for zone: " + zoneName);
+      } else {
+        server.send(400, "text/plain", "Missing temp parameter");
+      }
+    });
+    
+    Serial.println("Registered endpoint: " + setTempPath);
+    Serial.println("Registered endpoints:");
+    Serial.println(" - " + standbyOnPath);
+    Serial.println(" - " + standbyOffPath);
+  }
+  
+  Serial.println("All HTTP endpoints created");
+}
+
+void sendGetLiveDataCommand(String zone) {
+  String command = "{\"message_type\":\"hm_get_command_queue\",\"message\":\"{\\\"token\\\":\\\"" + 
+                   String(config.api_key) + "\\\",\\\"COMMANDS\\\":[{\\\"COMMAND\\\":\\\"{'GET_LIVE_DATA': \\\"" + zone + "\\\"}\\\",\\\"COMMANDID\\\":3}]}\"}";
+  webSocket.sendTXT(command);
+}
+
+void sendSetTemperatureCommand(String zone, float temperature) {
+  String command = "{\"message_type\":\"hm_get_command_queue\",\"message\":\"{\\\"token\\\":\\\"" + 
+                   String(config.api_key) + "\\\",\\\"COMMANDS\\\":[{\\\"COMMAND\\\":\\\"{'SET_TEMP': [" + 
+                   String(temperature, 1) + ",'" + zone + "']}\\\",\\\"COMMANDID\\\":2}]}\"}";
+  Serial.println("Sending command: " + command);
+  webSocket.sendTXT(command);
+}
+
+void sendStandbyCommand(String zone, bool on) {
+  String command = "{\"message_type\":\"hm_get_command_queue\",\"message\":\"{\\\"token\\\":\\\"" + 
+                   String(config.api_key) + "\\\",\\\"COMMANDS\\\":[{\\\"COMMAND\\\":\\\"" + 
+                   (on ? "{'FROST_ON': ['" : "{'FROST_OFF': ['") + zone + "']}" + 
+                   "\\\",\\\"COMMANDID\\\":3}]}\"}";
+  Serial.println("Sending command: " + command);
+  webSocket.sendTXT(command);
+}
+
+float extractTemperatureFromRequest() {
+  if(server.hasArg("temp")){
+    return server.arg("temp").toFloat();
+  }
+  return 0.0;  // default if not provided
 }
 
 // EEPROM functions for configuration management
@@ -304,22 +436,21 @@ void saveConfig() {
 }
 
 void setupHttpServer() {
-  // Setup endpoints for Loxone integration
-  server.on("/status", HTTP_GET, handleStatus);
-  server.on("/settemp", HTTP_POST, handleSetTemperature);
-  server.on("/gettemp", HTTP_GET, handleGetTemperature);
-  server.on("/reset", HTTP_GET, handleReset);
-  server.on("/test/getzones", HTTP_GET, handleGetZones);
-  
-  // Add a root handler for normal mode
-  server.on("/", HTTP_GET, []() {
-    String status = "Device is running normally<br>";
-    status += "WiFi: " + String(WiFi.status() == WL_CONNECTED ? "connected" : "disconnected") + "<br>";
-    status += "WebSocket: " + String(webSocket.isConnected() ? "connected" : "disconnected") + "<br>";
-    status += "<br><a href='/reset'>Reset Configuration</a>";
-    server.send(200, "text/html", status);
+  // Debug handler for all requests
+  server.onNotFound([]() {
+    String message = "No handler found\n";
+    message += "URI: " + server.uri() + "\n";
+    message += "Method: " + String((server.method() == HTTP_GET) ? "GET" : "POST") + "\n";
+    message += "Arguments: " + String(server.args()) + "\n";
+    
+    for (uint8_t i = 0; i < server.args(); i++) {
+      message += " " + server.argName(i) + ": " + server.arg(i) + "\n";
+    }
+    
+    Serial.println(message);
+    server.send(404, "text/plain", message);
   });
-  
+
   server.begin();
   Serial.println("HTTP server started");
 }
