@@ -2,6 +2,10 @@
 #include <ArduinoJson.h>
 #include "websockets_commands.h"
 #include "globals.h"
+#include <freertos/projdefs.h>
+
+#define TEMP_REQUEST_TIMEOUT 5000 // Define the timeout value in milliseconds
+#define TEMP_RETRY_INTERVAL 1000  // Define the retry interval in milliseconds
 
 String urlEncode(const String &str)
 {
@@ -93,26 +97,14 @@ void createHttpEndpoints(JsonObject zones)
               {
         auto it = temperatures.find(zoneName);
         
-        // If we have a cached value, return it
-        if (it != temperatures.end()) {
-            String response = "{\"zone\":\"" + zoneName + 
-                             "\",\"temperature\":" + 
-                             String(it->second, 1) + "}";
-            server.send(200, "application/json", response);
-            
-            // Request fresh value in background
-            sendGetTemperatureCommand(zoneName);
-            return;
-        }
-        
-        // No cached value - request and wait
+        // Request temperature
         sendGetTemperatureCommand(zoneName);
         lastTempRequest = millis();
         
-        // Wait for response with timeout
-        while (millis() - lastTempRequest < TEMP_TIMEOUT) {
-            webSocket.loop(); // Keep WebSocket alive
-            delay(100);
+        // Wait for response with retries
+        unsigned long startWait = millis();
+        while (millis() - startWait < TEMP_REQUEST_TIMEOUT) {
+            webSocket.loop();
             
             // Check if temperature arrived
             it = temperatures.find(zoneName);
@@ -123,12 +115,15 @@ void createHttpEndpoints(JsonObject zones)
                 server.send(200, "application/json", response);
                 return;
             }
+            
+            // Small delay between checks
+            vTaskDelay(pdMS_TO_TICKS(TEMP_RETRY_INTERVAL));
         }
         
         // Timeout reached
-        server.send(202, "text/plain", 
-            "Temperature request sent for zone: " + zoneName + 
-            ". Please try again in a few seconds."); });
+        server.send(408, "application/json", 
+            "{\"error\": \"Timeout waiting for temperature from zone: " + 
+            zoneName + "\"}"); });
 
     Serial.println("Registered endpoint: " + getTempPath);
 
