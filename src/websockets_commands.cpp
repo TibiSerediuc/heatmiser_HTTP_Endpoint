@@ -33,7 +33,7 @@ void sendGetZonesCommand()
   webSocket.sendTXT(command);
 }
 
-void sendGetTemperatureCommand(String zoneName)
+void sendGetTemperatureCommand()
 {
   // Build the inner JSON message
   StaticJsonDocument<256> innerDoc;

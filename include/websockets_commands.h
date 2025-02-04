@@ -5,6 +5,6 @@
 void sendGetZonesCommand();
 void sendSetTemperatureCommand(String zone, float temperature);
 void sendStandbyCommand(String zone, bool on);
-void sendGetTemperatureCommand(String zoneName);
+void sendGetTemperatureCommand();
 
 #endif

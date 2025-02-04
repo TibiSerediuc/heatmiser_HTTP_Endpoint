@@ -4,11 +4,14 @@
 #include "websockets.h"
 #include "webserver.h"
 #include "network.h"
+#include "websockets_commands.h"
+#include "dashboard.h"
 
 // Task handles
 TaskHandle_t webServerTaskHandle = NULL;
 TaskHandle_t webSocketTaskHandle = NULL;
 TaskHandle_t dnsServerTaskHandle = NULL;
+TaskHandle_t webDashboardTaskHandle = NULL;
 
 // Define stack sizes
 const uint32_t WEBSERVER_STACK_SIZE = 8192;
@@ -32,9 +35,12 @@ void webServerTask(void *parameter) {
 void webSocketTask(void *parameter) {
     while (true) {
         if (!isConfigMode) {
+            if (!webSocket.isConnected()) {
+                reconnectWebSocket();
+            }
             webSocket.loop();
         }
-        vTaskDelay(pdMS_TO_TICKS(10));
+        vTaskDelay(pdMS_TO_TICKS(100));
     }
 }
 
@@ -45,6 +51,24 @@ void dnsServerTask(void *parameter) {
             dnsServer.processNextRequest();
         }
         vTaskDelay(pdMS_TO_TICKS(10));
+    }
+}
+
+void webDashboardTask(void *parameter) {
+    const unsigned long UPDATE_INTERVAL = 30000;
+    unsigned long lastUpdate = 0;
+
+    while (true) {
+        if (webSocket.isConnected()) {
+            unsigned long currentMillis = millis();
+            
+            if (currentMillis - lastUpdate >= UPDATE_INTERVAL) {
+                // Send single GET_LIVE_DATA command instead of one per zone
+                sendGetTemperatureCommand();
+                lastUpdate = currentMillis;
+            }
+        }
+        vTaskDelay(pdMS_TO_TICKS(100));
     }
 }
 
@@ -104,6 +128,17 @@ void setup() {
             &webServerTaskHandle,
             0
         );
+
+        // Create Dashboard task on Core 0
+        xTaskCreatePinnedToCore(
+            webDashboardTask,
+            "Dashboard",
+            WEBSERVER_STACK_SIZE,
+            NULL,
+            WEBSERVER_PRIORITY,
+            &webDashboardTaskHandle,
+            0
+        );
     }
 }
 
@@ -116,7 +151,8 @@ void loop() {
             if (webServerTaskHandle != NULL) vTaskDelete(webServerTaskHandle);
             if (dnsServerTaskHandle != NULL) vTaskDelete(dnsServerTaskHandle);
             if (webSocketTaskHandle != NULL) vTaskDelete(webSocketTaskHandle);
-            
+            if (webDashboardTaskHandle != NULL) vTaskDelete(webDashboardTaskHandle);
+
             ESP.restart();
         }
     }

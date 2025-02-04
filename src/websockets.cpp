@@ -98,7 +98,7 @@ void createHttpEndpoints(JsonObject zones)
         auto it = temperatures.find(zoneName);
         
         // Request temperature
-        sendGetTemperatureCommand(zoneName);
+        sendGetTemperatureCommand();
         lastTempRequest = millis();
         
         // Wait for response with retries
@@ -109,9 +109,11 @@ void createHttpEndpoints(JsonObject zones)
             // Check if temperature arrived
             it = temperatures.find(zoneName);
             if (it != temperatures.end()) {
+                char tempStr[8];
+                dtostrf(it->second, 4, 1, tempStr); // Format to 1 decimal place
                 String response = "{\"zone\":\"" + zoneName + 
                                 "\",\"temperature\":" + 
-                                String(it->second, 1) + "}";
+                                String(tempStr) + "}";
                 server.send(200, "application/json", response);
                 return;
             }
@@ -271,6 +273,7 @@ void webSocketEvent(WStype_t type, uint8_t *payload, size_t length)
     Serial.println("[WSc] Connected to Heatmiser!");
     Serial.println("[WSc] Requesting zones...");
     sendGetZonesCommand();
+    sendGetTemperatureCommand();
     break;
 
   case WStype_TEXT:
@@ -311,4 +314,16 @@ void setupWebSocket()
   webSocket.onEvent(webSocketEvent);
 
   Serial.println("[WSc] Setup completed, waiting for connection...");
+}
+
+void reconnectWebSocket() {
+    static unsigned long lastReconnectAttempt = 0;
+    const unsigned long RECONNECT_INTERVAL = 5000; // 5 seconds
+
+    if (millis() - lastReconnectAttempt > RECONNECT_INTERVAL) {
+        Serial.println("[WSc] Attempting reconnection...");
+        webSocket.disconnect();
+        webSocket.beginSSL(config.heatmiser_ip, HEATMISER_PORT, "/");
+        lastReconnectAttempt = millis();
+    }
 }

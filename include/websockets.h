@@ -2,5 +2,6 @@
 #define WEBSOCKETS_H
 
 void setupWebSocket();
+void reconnectWebSocket();
 
 #endif
