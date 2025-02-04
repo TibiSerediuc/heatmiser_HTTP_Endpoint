@@ -137,105 +137,123 @@ void createHttpEndpoints(JsonObject zones)
 
 void handleWebSocketMessage(uint8_t *payload, size_t length)
 {
-  Serial.println("Parsing message...");
+  Serial.println("[WSc] Parsing message...");
 
   StaticJsonDocument<1024> doc;
   DeserializationError error = deserializeJson(doc, payload, length);
 
   if (error)
   {
-    Serial.print("deserializeJson() failed: ");
+    Serial.print("[WSc] deserializeJson() failed: ");
     Serial.println(error.c_str());
     return;
   }
 
   String debugMsg;
   serializeJson(doc, debugMsg);
-  Serial.println("Received JSON: " + debugMsg);
+  Serial.println("[WSc] Parsed JSON: " + debugMsg);
 
   const char *messageType = doc["message_type"];
-  if (messageType)
+  if (!messageType)
   {
-    Serial.println("Message type: " + String(messageType));
+    Serial.println("[WSc] No message_type in response");
+    return;
+  }
 
-    if (strcmp(messageType, "hm_set_command_response") == 0)
+  Serial.println("[WSc] Message type: " + String(messageType));
+
+  if (strcmp(messageType, "hm_set_command_response") == 0)
+  {
+    if (!doc.containsKey("command_id"))
     {
-      int commandId = doc["command_id"];
-      Serial.println("Command ID: " + String(commandId));
+      Serial.println("[WSc] No command_id in response");
+      return;
+    }
 
-      // Only create endpoints for GET_ZONES response (command_id 1)
-      if (commandId == 1)
+    int commandId = doc["command_id"];
+    Serial.println("[WSc] Command ID: " + String(commandId));
+
+    // Only create endpoints for GET_ZONES response (command_id 1)
+    if (commandId == 1)
+    {
+      if (!doc.containsKey("response"))
       {
-        String response = doc["response"];
-        Serial.println("Received zones response: " + response);
-
-        // Verify this is a zones list response by checking content
-        DynamicJsonDocument zoneDoc(1024);
-        DeserializationError zoneError = deserializeJson(zoneDoc, response.c_str());
-        if (zoneError)
-        {
-          Serial.print("deserializeJson() failed for zones: ");
-          Serial.println(zoneError.c_str());
-          return;
-        }
-
-        // Skip if response contains "result" instead of zones
-        if (zoneDoc.containsKey("result"))
-        {
-          Serial.println("Skipping endpoint creation - not a zones list");
-          return;
-        }
-
-        // Only create endpoints if not already created
-        if (!endpointsCreated)
-        {
-          createHttpEndpoints(zoneDoc.as<JsonObject>());
-          endpointsCreated = true;
-        }
+        Serial.println("[WSc] No response field in message");
+        return;
       }
-      // Handle GET_LIVE_DATA response (command_id 2)
-      else if (commandId == 2)
+
+      String response = doc["response"];
+      Serial.println("[WSc] Received zones response: " + response);
+
+      DynamicJsonDocument zoneDoc(1024);
+      DeserializationError zoneError = deserializeJson(zoneDoc, response.c_str());
+      if (zoneError)
       {
+        Serial.print("[WSc] Failed to parse zones response: ");
+        Serial.println(zoneError.c_str());
+        return;
+      }
 
-        String response = doc["response"];
-        Serial.println("Free heap before parsing: " + String(ESP.getFreeHeap()));
+      if (zoneDoc.containsKey("result"))
+      {
+        Serial.println("[WSc] Skipping - response contains only result field");
+        return;
+      }
 
-        // Create filter to only parse needed fields
-        StaticJsonDocument<128> filter;
-        filter["devices"][0]["ZONE_NAME"] = true;
-        filter["devices"][0]["ACTUAL_TEMP"] = true;
+      if (!endpointsCreated)
+      {
+        Serial.println("[WSc] Creating HTTP endpoints...");
+        createHttpEndpoints(zoneDoc.as<JsonObject>());
+        endpointsCreated = true;
+        Serial.println("[WSc] Endpoints created successfully");
+      }
+      else
+      {
+        Serial.println("[WSc] Endpoints already exist");
+      }
+    }
+    // Handle GET_LIVE_DATA response (command_id 2)
+    else if (commandId == 2)
+    {
 
-        // Use larger buffer with filter
-        DynamicJsonDocument responseDoc(32768); // Increased buffer
-        DeserializationError responseError = deserializeJson(
-            responseDoc,
-            response,
-            DeserializationOption::Filter(filter));
+      String response = doc["response"];
+      Serial.println("Free heap before parsing: " + String(ESP.getFreeHeap()));
 
-        if (responseError)
+      // Create filter to only parse needed fields
+      StaticJsonDocument<128> filter;
+      filter["devices"][0]["ZONE_NAME"] = true;
+      filter["devices"][0]["ACTUAL_TEMP"] = true;
+
+      // Use larger buffer with filter
+      DynamicJsonDocument responseDoc(32768); // Increased buffer
+      DeserializationError responseError = deserializeJson(
+          responseDoc,
+          response,
+          DeserializationOption::Filter(filter));
+
+      if (responseError)
+      {
+        Serial.print("Failed to parse LIVE_DATA response: ");
+        Serial.println(responseError.c_str());
+        return;
+      }
+
+      JsonArray devices = responseDoc["devices"];
+      if (!devices.isNull())
+      {
+        for (JsonObject device : devices)
         {
-          Serial.print("Failed to parse LIVE_DATA response: ");
-          Serial.println(responseError.c_str());
-          return;
-        }
-
-        JsonArray devices = responseDoc["devices"];
-        if (!devices.isNull())
-        {
-          for (JsonObject device : devices)
+          if (device.containsKey("ZONE_NAME") && device.containsKey("ACTUAL_TEMP"))
           {
-            if (device.containsKey("ZONE_NAME") && device.containsKey("ACTUAL_TEMP"))
-            {
-              String zoneName = device["ZONE_NAME"].as<String>();
-              String tempStr = device["ACTUAL_TEMP"].as<String>();
-              temperatures[zoneName] = tempStr.toFloat();
-              Serial.println("Temperature for " + zoneName + ": " + tempStr);
-            }
+            String zoneName = device["ZONE_NAME"].as<String>();
+            String tempStr = device["ACTUAL_TEMP"].as<String>();
+            temperatures[zoneName] = tempStr.toFloat();
+            Serial.println("Temperature for " + zoneName + ": " + tempStr);
           }
         }
-
-        Serial.println("Free heap after parsing: " + String(ESP.getFreeHeap()));
       }
+
+      Serial.println("Free heap after parsing: " + String(ESP.getFreeHeap()));
     }
   }
 }
@@ -245,60 +263,58 @@ void webSocketEvent(WStype_t type, uint8_t *payload, size_t length)
   switch (type)
   {
   case WStype_DISCONNECTED:
-    Serial.println("WebSocket Disconnected!");
+    Serial.println("[WSc] Disconnected!");
+    endpointsCreated = false; // Reset endpoints flag on disconnect
     break;
 
   case WStype_CONNECTED:
-    Serial.println("WebSocket Connected!");
-    sendGetZonesCommand(); // Send GET_ZONES command when connected
+    Serial.println("[WSc] Connected to Heatmiser!");
+    Serial.println("[WSc] Requesting zones...");
+    sendGetZonesCommand();
     break;
 
   case WStype_TEXT:
-    Serial.println("Received message: " + String((char *)payload));
+    Serial.println("[WSc] Received: " + String((char *)payload));
     handleWebSocketMessage(payload, length);
     break;
 
   case WStype_ERROR:
-    Serial.println("WebSocket Error!");
+    Serial.println("[WSc] Error occurred!");
     if (payload)
     {
-      Serial.println("Error payload: " + String((char *)payload));
+      Serial.println("[WSc] Error payload: " + String((char *)payload));
     }
     break;
 
   case WStype_BIN:
-    Serial.println("Received binary data");
+    Serial.println("[WSc] Got binary length: " + String(length));
     break;
 
   case WStype_PING:
-    Serial.println("Received ping");
+    Serial.println("[WSc] Got ping");
     break;
 
   case WStype_PONG:
-    Serial.println("Received pong");
-    break;
-
-  case WStype_FRAGMENT_TEXT_START:
-  case WStype_FRAGMENT_BIN_START:
-  case WStype_FRAGMENT:
-  case WStype_FRAGMENT_FIN:
-    Serial.println("Received fragmented data");
+    Serial.println("[WSc] Got pong");
     break;
   }
 }
 
 void setupWebSocket()
 {
-  Serial.println("Setting up WebSocket connection...");
-  Serial.println("Heatmiser IP: " + String(config.heatmiser_ip));
-  Serial.println("Heatmiser Port: " + String(HEATMISER_PORT));
+  Serial.println("[WSc] Setting up WebSocket connection...");
+  Serial.println("[WSc] Heatmiser IP: " + String(config.heatmiser_ip));
+  Serial.println("[WSc] Heatmiser Port: " + String(HEATMISER_PORT));
+
+  // Set larger timeout for SSL handshake
+  webSocket.setReconnectInterval(5000);
+  webSocket.enableHeartbeat(15000, 3000, 2);
 
   // Begin WebSocket connection with SSL
   webSocket.beginSSL(config.heatmiser_ip, HEATMISER_PORT, "/");
-
   webSocket.onEvent(webSocketEvent);
 
-  Serial.println("WebSocket setup completed");
+  Serial.println("[WSc] Setup completed, waiting for connection...");
 }
 
 // Helper function to extract a value after a given key.
