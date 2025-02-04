@@ -306,40 +306,9 @@ void setupWebSocket()
   Serial.println("[WSc] Heatmiser IP: " + String(config.heatmiser_ip));
   Serial.println("[WSc] Heatmiser Port: " + String(HEATMISER_PORT));
 
-  // Set larger timeout for SSL handshake
-  webSocket.setReconnectInterval(5000);
-  webSocket.enableHeartbeat(15000, 3000, 2);
-
   // Begin WebSocket connection with SSL
   webSocket.beginSSL(config.heatmiser_ip, HEATMISER_PORT, "/");
   webSocket.onEvent(webSocketEvent);
 
   Serial.println("[WSc] Setup completed, waiting for connection...");
-}
-
-// Helper function to extract a value after a given key.
-String extractValue(const char *json, const char *key)
-{
-  // Locate the key in the JSON string.
-  const char *keyPos = strstr(json, key);
-  if (!keyPos)
-    return String();
-
-  // Find the ':' that follows the key.
-  const char *colonPos = strchr(keyPos, ':');
-  if (!colonPos)
-    return String();
-
-  // Skip colon and any whitespace or quotes.
-  colonPos++;
-  while (*colonPos == ' ' || *colonPos == '\"')
-    colonPos++;
-
-  // Now, copy the value until we hit a delimiter (comma, quote, or closing brace).
-  const char *endPos = colonPos;
-  while (*endPos && *endPos != ',' && *endPos != '}' && *endPos != '\"')
-    endPos++;
-
-  int len = endPos - colonPos;
-  return String(colonPos).substring(0, len);
 }
