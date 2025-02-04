@@ -4,7 +4,7 @@ void setupHttpServer()
 {
   // Debug handler for all requests
   server.onNotFound([]()
-                    {
+  {
     String message = "No handler found\n";
     message += "URI: " + server.uri() + "\n";
     message += "Method: " + String((server.method() == HTTP_GET) ? "GET" : "POST") + "\n";
@@ -15,7 +15,8 @@ void setupHttpServer()
     }
     
     Serial.println(message);
-    server.send(404, "text/plain", message); });
+    server.send(404, "text/plain", message); 
+  });
 
   server.begin();
   Serial.println("HTTP server started");
