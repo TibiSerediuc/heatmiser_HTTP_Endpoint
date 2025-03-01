@@ -27,6 +27,7 @@ extern bool endpointsCreated;
 extern unsigned long lastTempRequest;
 extern const unsigned long TEMP_TIMEOUT; // 2 seconds timeout
 extern std::map<String, float> temperatures;
+extern std::map<String, bool> zoneStandbyStates;
 extern TaskHandle_t webDashboardTaskHandle;
 
 // Configuration structure

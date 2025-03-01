@@ -25,6 +25,13 @@ void setupHttpServer()
           server.send(500, "application/json", "{\"error\":\"Internal server error\"}");
       }
   });
+  server.on("/api/toggle", HTTP_POST, []() {
+      try {
+          handleToggleZone();
+      } catch (const std::exception& e) {
+          server.send(500, "application/json", "{\"error\":\"Internal server error\"}");
+      }
+  });
   
   // Add handler for unknown endpoints
   server.onNotFound([]() {

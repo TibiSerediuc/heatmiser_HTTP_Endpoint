@@ -4,5 +4,6 @@
 void handleDashboard();
 void handleGetZones();
 void handleGetStatus();
+void handleToggleZone();
 
 #endif

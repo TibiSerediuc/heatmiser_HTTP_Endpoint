@@ -1,6 +1,7 @@
 #include "Arduino.h"
 #include "ArduinoJson.h"
 #include "globals.h"
+#include "websockets_commands.h"
 
 void handleDashboard() {
     String html = R"rawliteral(
@@ -71,6 +72,54 @@ void handleDashboard() {
 
         .status-dot.online { background-color: #4ade80; }
         .status-dot.offline { background-color: #ef4444; }
+
+        .toggle-switch {
+            position: relative;
+            width: 50px;
+            height: 28px;
+            background-color: #e9e9ea;
+            border-radius: 28px;
+            cursor: pointer;
+            transition: background-color 0.3s;
+            box-shadow: inset 0 0 5px rgba(0, 0, 0, 0.1);
+            -webkit-appearance: none;
+            appearance: none;
+            outline: none;
+            border: none;
+        }
+
+        .toggle-switch:checked {
+            background-color: #4ade80;
+        }
+
+        .toggle-switch::before {
+            content: '';
+            position: absolute;
+            width: 26px;
+            height: 26px;
+            border-radius: 50%;
+            top: 1px;
+            left: 1px;
+            background-color: white;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+            transition: transform 0.3s;
+        }
+
+        .toggle-switch:checked::before {
+            transform: translateX(22px);
+        }
+
+        .toggle-label {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-top: 10px;
+        }
+
+        .toggle-status {
+            font-size: 0.85em;
+            color: #999;
+        }
 
         .tabs {
             display: flex;
@@ -310,8 +359,47 @@ void handleDashboard() {
                         <div style="font-size: 2em;">${zone.temperature.toFixed(1)}°C</div>
                         <div style="color: #666; font-size: 0.8em;">Last update: ${new Date().toLocaleTimeString()}</div>
                     </div>
+                    <div class="toggle-label">
+                        <span>Heating</span>
+                        <div style="display: flex; align-items: center;">
+                            <span class="toggle-status">${zone.standby ? 'Off' : 'On'}</span>
+                            <input type="checkbox" class="toggle-switch" data-zone="${zone.name}" ${zone.standby ? '' : 'checked'}>
+                        </div>
+                    </div>
                 `;
+                
+                // Add event listener to the toggle switch
+                setTimeout(() => {
+                    const toggle = card.querySelector('.toggle-switch');
+                    if (toggle) {
+                        toggle.addEventListener('change', (e) => {
+                            const zoneName = e.target.dataset.zone;
+                            const isStandby = !e.target.checked;
+                            this.toggleZoneStandby(zoneName, isStandby);
+                            e.target.parentNode.querySelector('.toggle-status').textContent = isStandby ? 'Off' : 'On';
+                        });
+                    }
+                }, 0);
+                
                 return card;
+            }
+
+            toggleZoneStandby(zoneName, standby) {
+                fetch('/api/toggle', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ zone: zoneName, standby: standby })
+                })
+                .then(response => response.json())
+                .then(data => {
+                    console.log('Toggle response:', data);
+                    // Could update UI based on response if needed
+                })
+                .catch(error => {
+                    console.error('Error toggling zone:', error);
+                });
             }
 
             updateZones(zones) {
@@ -376,12 +464,46 @@ void handleGetZones() {
         JsonObject zone = array.createNestedObject();
         zone["name"] = temp.first;
         zone["temperature"] = temp.second;
-        zone["standby"] = false; // You'll need to track this state
+        
+        // Get the standby state for this zone (default to false if not set)
+        bool standby = false;
+        if (zoneStandbyStates.find(temp.first) != zoneStandbyStates.end()) {
+            standby = zoneStandbyStates[temp.first];
+        }
+        zone["standby"] = standby;
     }
     
     String response;
     serializeJson(doc, response);
     server.send(200, "application/json", response);
+}
+
+void handleToggleZone() {
+    if (server.hasArg("plain")) {
+        String body = server.arg("plain");
+        DynamicJsonDocument doc(256);
+        deserializeJson(doc, body);
+        
+        String zoneName = doc["zone"];
+        bool standby = doc["standby"];
+        
+        // Store the standby state
+        zoneStandbyStates[zoneName] = standby;
+        
+        // Send the standby command to the thermostat
+        sendStandbyCommand(zoneName, standby);
+        
+        // Respond with success
+        DynamicJsonDocument responseDoc(128);
+        responseDoc["success"] = true;
+        responseDoc["message"] = "Toggle command sent";
+        
+        String response;
+        serializeJson(responseDoc, response);
+        server.send(200, "application/json", response);
+    } else {
+        server.send(400, "application/json", "{\"error\":\"Invalid request\"}");
+    }
 }
 
 void handleGetStatus() {

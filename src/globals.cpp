@@ -11,4 +11,5 @@ bool endpointsCreated = false;
 unsigned long lastTempRequest = 0;
 const unsigned long TEMP_TIMEOUT = 2000; // 2 seconds timeout
 std::map<String, float> temperatures;
+std::map<String, bool> zoneStandbyStates;
 Config config;
